@@ -7,6 +7,7 @@ import { createRewriteUI } from './ui.js';
 import { createModelRouting } from './model-routing.js';
 import { REVISION, recoverLegacyRewrite, versionLink, jumpVersion } from './revisions.js';
 import { claimNativeGeneration, clearNativePrompt, completeNativeSwipe, liveNativeReply, recoverNativeSwipe, restoreNativeSwipe, startNativeSwipe } from './native-swipe.js';
+import { createReplyDelivery } from './reply-delivery.js';
 
 const KEY = 'rewrite_writer';
 const RUNTIME = Symbol.for('st.auto-rewrite.standalone');
@@ -28,6 +29,8 @@ let sequence = 0;
 let status = '等待下一次生成';
 const subscriptions = [];
 const routing = createModelRouting();
+const delivery = createReplyDelivery(getContext, () => running ??
+    (installed && settings().auto && settings().feedback.trim() && cycle?.eligible && !cycle.attempted ? cycle : null));
 
 function settings() {
     const all = getContext().extensionSettings;
@@ -64,10 +67,11 @@ function setStatus(text) {
     ui?.refresh();
 }
 
-function clearPending() {
+function clearPending(keepDelivery = false) {
     clearTimeout(timer);
     timer = undefined;
     pending = null;
+    if (!keepDelivery) delivery.finish(cycle);
 }
 
 function matches(attempt, ctx = getContext()) {
@@ -101,7 +105,7 @@ function manualRewrite(attempt) {
         ui?.refresh(); return;
     }
     if (composerBusy()) { globalThis.toastr?.info('请先发送或清空输入框中的草稿与附件。'); return; }
-    clearPending();
+    clearPending(true);
     if (cycle) cycle.attempted = true;
     void rewrite(attempt, false);
 }
@@ -137,7 +141,7 @@ function queue() {
         if (!isIdle(ctx)) { setStatus('等待首轮生成和保存完成'); queue(); return; }
         if (composerBusy()) { setStatus('输入框有草稿或附件，暂缓自动重写'); queue(); return; }
         cycle.attempted = true;
-        clearPending();
+        clearPending(true);
         void rewrite(attempt);
     }, 150);
 }
@@ -150,8 +154,8 @@ async function rewrite(attempt, automatic = true) {
     if (running) return;
     const ctx = getContext();
     const feedback = settings().feedback.trim();
-    if (!feedback) { setStatus('请先填写修改意见'); ui?.openSettings(); return; }
-    if (!matches(attempt, ctx) || !isIdle(ctx) || composerBusy()) return;
+    if (!feedback) { delivery.finish(cycle); setStatus('请先填写修改意见'); ui?.openSettings(); return; }
+    if (!matches(attempt, ctx) || !isIdle(ctx) || composerBusy()) { delivery.finish(cycle); return; }
     const now = Date.now();
     const firstStarted = Date.parse(attempt.message.gen_started);
     const job = { id: `rewrite-${now.toString(36)}-${Math.random().toString(36).slice(2)}`,
@@ -160,6 +164,7 @@ async function rewrite(attempt, automatic = true) {
         cancelled: false, generating: false, automatic,
         timing: { startedAt: automatic && Number.isFinite(firstStarted) ? Math.min(firstStarted, now) : now, rewriteStartedAt: now } };
     running = job;
+    if (cycle?.delivery) { job.delivery = cycle.delivery; delete cycle.delivery; }
     setStatus('正在准备重写');
     try {
         job.route = routing.acquire({ ...settings() }, () => sameJob(job) && job.generating);
@@ -189,6 +194,8 @@ async function rewrite(attempt, automatic = true) {
         job.route?.release();
         clearNativePrompt(job);
         if (running === job) running = null;
+        delivery.finish(job, job.settled === true);
+        if (!installed && globalThis[RUNTIME]?.disable === disable) delete globalThis[RUNTIME];
         ui?.sync();
         ui?.refresh();
     }
@@ -207,7 +214,7 @@ export function enable() {
     if (installed) return;
     globalThis[RUNTIME]?.disable?.();
     installed = true;
-    globalThis[RUNTIME] = { disable };
+    globalThis[RUNTIME] = { disable, replyDelivery: { version: 1, waitForReply: delivery.waitForReply } };
     const { eventTypes: events } = getContext();
     ui = createRewriteUI({ getSettings: settings, getView: view, onRewrite: manualRewrite, onJump: jump,
         getRouting: () => routing.describe(settings()),
@@ -221,7 +228,7 @@ export function enable() {
             if (!value) clearPending();
             setStatus(value ? '等待下一次生成' : running ? '当前重写继续进行，后续自动重写已关闭' : '自动重写已关闭');
         },
-        onFeedback: value => { settings().feedback = value; getContext().saveSettingsDebounced(); } });
+        onFeedback: value => { settings().feedback = value; if (!value.trim()) clearPending(); getContext().saveSettingsDebounced(); } });
     ui.install();
     subscribe(events.APP_READY, () => { ui?.install(); void recoverInterrupted(); });
     subscribe(events.SETTINGS_LOADED, () => { ui?.sync(); ui?.refresh(); });
@@ -263,7 +270,7 @@ export function enable() {
     subscribe(events.TOOL_CALLS_PERFORMED, () => {
         if (running?.nativeStarted && !running.cancelled) running.toolContinuation = true;
     });
-    subscribe(events.GENERATION_ENDED, () => { ui?.refresh(); queue(); });
+    subscribe(events.GENERATION_ENDED, () => { if (!pending && !running) delivery.finish(cycle); ui?.refresh(); queue(); });
     subscribe(events.GENERATION_STOPPED, () => {
         clearPending(); cycle = null;
         if (running) { running.cancelled = true; running.timing.finishedAt ??= Date.now(); }
@@ -285,6 +292,7 @@ export function enable() {
     for (const type of [events.MESSAGE_SWIPED, events.MESSAGE_UPDATED, events.MESSAGE_DELETED,
         events.CHARACTER_MESSAGE_RENDERED, events.MORE_MESSAGES_LOADED]) subscribe(type, () => ui?.refresh());
     subscribe(events.MESSAGE_SENT, () => {
+        clearPending(); cycle = null;
         if (running) {
             running.cancelled = true; running.timing.finishedAt ??= Date.now();
             clearNativePrompt(running); running.route?.release();
@@ -307,6 +315,7 @@ export function disable() {
     for (const [type, handler] of subscriptions.splice(0)) ctx.eventSource.removeListener(type, handler);
     $(document).off('.autoRewriteComposer');
     ui?.dispose(); ui = null;
+    if (!job && globalThis[RUNTIME]?.disable === disable) delete globalThis[RUNTIME];
 }
 
 jQuery(enable);

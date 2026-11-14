@@ -1,5 +1,9 @@
 # SillyTavern Auto Rewrite（正文重写 · 独立版）
 
+**当前版本：3.1.2** · RevolvinDoor fork · 原生 Swipe / RevoPhone 适配版
+
+基于 wujimol 原作，整合 [wmdl2 的原生 Swipe PR #1](https://github.com/wujimol/SillyTavern-Auto-Rewrite/pull/1)（f7b8ddad2bda9fe5faed3a875c72bfc7165f53bc），再加入可选的 RevoPhone 联动协调。
+
 让 SillyTavern 在回复生成后再自动（或手动）重写一轮的扩展，**不需要改酒馆本体**，官方原版酒馆直接安装就能用。
 
 ## 为什么做这个扩展
@@ -31,10 +35,10 @@
 在酒馆的 **扩展 → 安装扩展** 中直接填入仓库地址：
 
 ```text
-https://github.com/wujimol/SillyTavern-Auto-Rewrite
+https://github.com/RevolvinDoor/SillyTavern-Auto-Rewrite
 ```
 
-或者手动下载源码，将 `index.js`、`native-swipe.js`、`revisions.js`、`ui.js`、`model-routing.js`、`manifest.json`、`style.css` 放到酒馆的第三方扩展目录下，刷新页面即可。
+或者手动下载源码，将 `index.js`、`native-swipe.js`、`reply-delivery.js`、`revisions.js`、`ui.js`、`model-routing.js`、`manifest.json`、`style.css` 放到酒馆的第三方扩展目录下，刷新页面即可。
 
 > 如果之前装过旧的定制版，建议先禁用或替换掉旧版，避免两个扩展同时触发。
 
@@ -52,6 +56,7 @@ https://github.com/wujimol/SillyTavern-Auto-Rewrite
 
 ## 使用注意与兼容说明
 
+- **RevoPhone**：本 fork 与 RevoPhone 1.4.4 或更新版提供可选协作；其他插件仍遵循原生 Swipe 边界。
 - **插件兼容边界**：生成过程走原生 Swipe，其他插件接收到宿主的 `MESSAGE_SWIPED`、`GENERATION_STARTED('swipe')`、`MESSAGE_RECEIVED(id, 'swipe')` 与渲染事件。不会用 `automatic_trigger` 把正文伪装成后台 normal 生成，也不人为重发消息交付事件。原生 Swipe 已有的插件限制仍然存在：例如其他插件的首稿结算、每个候选的数据恢复、仅对 normal 触发的逻辑。此扩展不改写数据库或其他插件来额外解决这些问题。
 - **提示词保持范围**：默认提示词和用户保存的修改意见原文不变，原稿仍使用 assistant 角色，修改意见仍使用 user 角色。原生 Swipe 与 normal 的宿主事件、历史处理及提示注入机制有差异；特殊世界书触发、深度正则、思考签名、附件、上下文裁剪和其他插件逻辑不能据此保证与原版逐项一致。
 - **生成设置**：尊重当前消息的禁止翻页、循环翻页等设置；不能生成新 Swipe 时明确提示，不临时改动宿主偏好来绕过。只对最新的单角色正文重写，不支持群聊与开场白。
@@ -60,15 +65,31 @@ https://github.com/wujimol/SillyTavern-Auto-Rewrite
 - **额度消耗**：每次重写会多发一次模型请求，开启自动重写时单轮会消耗两轮额度。
 - **适用范围**：目前只支持单角色聊天；群聊、开场白和纯空白回复不会触发。
 
+## RevoPhone 联动（3.1.2）
+
+两个扩展都更新后自动生效，无需额外开关，也不修改酒馆本体。
+
+- 自动重写：首稿仍可阅读；手机自动联动等待本次重写完成，只按最终保留稿交付一次。等待生成／保存期间输入草稿会继续暂缓重写；关闭自动开关可立即按原稿继续联动。
+- 失败或停止：通过原生 Swipe 恢复原稿后，按原稿继续；切换聊天或消息归属改变时不向新聊天交付旧结果。
+- 事后手动重写：更新正文绑定状态与手机消息，不重复累计自动朋友圈、自动来电和主动联系的回复次数。已经发生的独立活动保留。
+- 查看原稿／返回重写版：角色状态与正文绑定手机消息跟随当前候选。手机里已经有玩家回复的对话保留；不会因为翻页再次触发独立动作或自动生成手机照片。
+- 单独使用：Auto-Rewrite 不依赖 RevoPhone。RevoPhone 没安装此 fork、此扩展已禁用、自动重写关闭且未手动重写时，继续原有流程。其他分支或旧版组合没有本次延后交付协议。
+
+可选接口使用 `globalThis[Symbol.for('st.auto-rewrite.standalone')].replyDelivery`，版本为 `1`。消费者在接收／渲染时调用 `waitForReply(id, type)`：普通回复同步返回 `null`；明确的自动等待或正在进行的重写返回同一 Promise。Promise 在原生生成、恢复、提示清理与模型路由释放之后解析为 `{ready, count, key, index, message, swipeId, text}`。只有 `ready` 且聊天／消息／版本仍匹配时交付；`count: false` 表示事后手动重写。不要在宿主事件回调中返回或 await 该 Promise，避免阻塞后续原生事件。关闭待处理的自动重写会释放原稿；禁用运行中的重写会先完成取消清理再释放接口。
+
+此接口只协调交付，不屏蔽、重发宿主事件，也不复制其他插件的消息字段。真实模型、真实账号和 Android 操作仍需实际使用验收。
+
 ## 本地验证
 
 使用 Node.js 运行定向测试（无外部依赖）：
 
 ```sh
-node --experimental-vm-modules tests/native-swipe.test.mjs
+node tests/run-tests.mjs
 ```
 
-测试使用模拟宿主覆盖同楼 Swipe、事件与楼层数、原字段保留、旧候选重写、自动模式、停止／失败、切聊天、模型路由释放及中断恢复。另在隔离 SillyTavern 1.18 / Chromium 153 中使用合成聊天与模拟模型回复验证非流式／流式、自动改写、停止／失败及存档重开与版本切换。原作者默认修改意见在 none 和 strict 两种设置下，改造前后发送的完整 messages 相同。未验证真实模型渠道、TauriTavern 或所有第三方插件组合。
+当前 28 项通过，含可选交付接口的自动／手动、禁用、取消、失败与上下文切换用例。运行器逐例使用独立 Node 进程，避开本机 Windows Node 22.19.0 在同一进程重复使用实验性 VM 模块时的进程崩溃；所有用例各执行一次，任一失败都会退出。这只影响测试运行器，不是扩展运行参数。
+
+本次测试使用模拟宿主覆盖同楼 Swipe、事件与楼层数、原字段保留、旧候选重写、自动模式、停止／失败、切聊天、模型路由释放及中断恢复。PR 作者在整合前另用隔离 SillyTavern 1.18 / Chromium 153、合成聊天与模拟回复验证过非流式／流式、自动改写、停止／失败、存档重开与版本切换，并报告默认修改意见在 none 和 strict 设置下，改造前后完整 messages 相同。本次 RevoPhone 适配未复跑该浏览器环境，也未验证真实模型渠道、TauriTavern 实机或所有第三方插件组合。
 
 ## 许可
 

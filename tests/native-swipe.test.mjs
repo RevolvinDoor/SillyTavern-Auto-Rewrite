@@ -1,4 +1,4 @@
-import { test } from 'node:test';
+import { test as runTest } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import vm from 'node:vm';
@@ -6,8 +6,10 @@ import vm from 'node:vm';
 const constants = { SWIPE_STATE: { NONE: 'none' }, SWIPE_DIRECTION: { LEFT: 'left', RIGHT: 'right' },
     SWIPE_SOURCE: { SLASH_COMMAND: 'slash_command', SWIPE_PICKER: 'swipe_picker' }, OVERSWIPE_BEHAVIOR: { REGENERATE: 'regenerate' } };
 const root = new URL('../', import.meta.url);
+const caseNames = [];
+const test = process.env.AUTO_REWRITE_LIST_CASES === '1' ? name => caseNames.push(name) : runTest;
 
-async function fixture({ swipes = ['original'], selected = 0, auto = false } = {}) {
+export async function fixture({ swipes = ['original'], selected = 0, auto = false, consumer } = {}) {
     const handlers = new Map(), events = [], receipts = new Map(), logs = [], calls = [];
     const user = { is_user: true, mes: 'original input with recalled memory', qrf_plot: 'original plot' };
     const source = { is_user: false, mes: swipes[selected], swipe_id: selected, swipes: [...swipes],
@@ -76,7 +78,8 @@ async function fixture({ swipes = ['original'], selected = 0, auto = false } = {
     } };
     let released = 0, acquired = 0;
     const routing = { acquire: () => { acquired++; let done = false; return { label: 'test route', release() { if (!done) { done = true; released++; } } }; } };
-    const context = vm.createContext({ console: { error: (...args) => logs.push(args), warn: (...args) => logs.push(args) },
+    const globals = {};
+    const context = vm.createContext({ globalThis: globals, console: { error: (...args) => logs.push(args), warn: (...args) => logs.push(args) },
         structuredClone, setTimeout, clearTimeout, requestAnimationFrame: callback => { callback(); return 1; }, document: { getElementById: () => null, querySelector: () => null, querySelectorAll: () => [] },
         sessionStorage: { getItem: key => receipts.get(key) ?? null, setItem: (key,value) => receipts.set(key,value), removeItem: key => receipts.delete(key) },
         jQuery() {}, $: () => ({ on() {}, off() {} }) });
@@ -101,6 +104,10 @@ async function fixture({ swipes = ['original'], selected = 0, auto = false } = {
         });
         return module;
     }
+    // RevoPhone normally loads earlier (order 50 vs 220). Install the consumer
+    // first so tests exercise that exact awaited-event ordering.
+    const runtime = () => globals[Symbol.for('st.auto-rewrite.standalone')];
+    consumer?.(ctx, runtime);
     const entry = await load(new URL('index.js', root)); await entry.evaluate(); entry.namespace.enable();
     const native = await load(new URL('native-swipe.js', root));
     const finish = async (text = 'rewritten') => {
@@ -114,7 +121,7 @@ async function fixture({ swipes = ['original'], selected = 0, auto = false } = {
         throw new Error('rewrite did not settle');
     };
     return { ctx, core, source, user, events, receipts, calls, logs, native: native.namespace, revisions: (await load(new URL('revisions.js', root))).namespace,
-        ui: () => ui, routes: () => ({ acquired, released }), setGenerate: fn => { generate = fn; }, finish, wait,
+        ui: () => ui, runtime, routes: () => ({ acquired, released }), setGenerate: fn => { generate = fn; }, finish, wait,
         async rewrite() { ui.onRewrite(ui.getView().reply); await wait(); }, disable: () => entry.namespace.disable() };
 }
 
@@ -137,6 +144,94 @@ test('manual rewrite uses a native same-floor swipe, without synthetic lifecycle
     assert.deepEqual(Object.keys(f.ctx.extensionPrompts), ['other']);
     assert.deepEqual(f.routes(), { acquired: 1, released: 1 }); assert.equal(f.receipts.size, 0);
     f.disable();
+});
+
+function observeDelivery(ctx, runtime, deliveries) {
+    for (const event of ['MESSAGE_RECEIVED', 'CHARACTER_MESSAGE_RENDERED']) {
+        ctx.eventSource.on(event, (id, type) => {
+            const waiting = runtime()?.replyDelivery.waitForReply(id, type);
+            if (!waiting) { deliveries.push({event, text: ctx.chat[id].mes, count: true, deferred: false}); return; }
+            void waiting.then(result => { if (result.ready) deliveries.push({event, ...result, deferred: true}); });
+        });
+    }
+}
+
+test('optional consumers loaded first wait through auto rewrite and route cleanup', async () => {
+    const seen = [];
+    const f = await fixture({auto: true, consumer: (ctx,runtime) => observeDelivery(ctx,runtime,seen)});
+    await f.ctx.eventSource.emit('GENERATION_STARTED', 'normal', {}, false);
+    await f.ctx.eventSource.emit('MESSAGE_RECEIVED', 1, 'normal');
+    await f.ctx.eventSource.emit('CHARACTER_MESSAGE_RENDERED', 1, 'normal');
+    await f.ctx.eventSource.emit('GENERATION_ENDED', 1);
+    assert.equal(seen.length, 0);
+    f.setGenerate(async () => { await f.finish(); assert.equal(seen.length, 0); });
+    await new Promise(resolve => setTimeout(resolve, 220)); await f.wait();
+    assert.ok(seen.length >= 2);
+    assert.ok(seen.every(d => d.text === 'rewritten' && d.count && d.deferred));
+    assert.equal(f.routes().released, 1); f.disable();
+});
+
+test('manual rewrite defers its candidate without counting a new turn', async () => {
+    const seen = [];
+    const f = await fixture({consumer: (ctx,runtime) => observeDelivery(ctx,runtime,seen)});
+    await f.ctx.eventSource.emit('GENERATION_STARTED', 'normal', {}, false);
+    await f.ctx.eventSource.emit('MESSAGE_RECEIVED', 1, 'normal');
+    assert.equal(seen[0].deferred, false);
+    await f.rewrite();
+    assert.ok(seen.slice(1).every(d => d.text === 'rewritten' && d.count === false));
+    assert.equal(seen.length, 3); f.disable();
+});
+
+for (const mode of ['stop', 'failure', 'disable-pending', 'disable-running', 'clear-feedback']) {
+    test(`deferred automatic reply falls back to original on ${mode}`, async () => {
+        const f = await fixture({auto: true});
+        await f.ctx.eventSource.emit('GENERATION_STARTED', 'normal', {}, false);
+        const held = f.runtime().replyDelivery.waitForReply(1, 'normal');
+        await f.ctx.eventSource.emit('MESSAGE_RECEIVED', 1, 'normal');
+        if (mode === 'disable-pending') f.disable();
+        else if (mode === 'clear-feedback') f.ui().onFeedback('');
+        else {
+            f.setGenerate(async () => {
+                f.source.mes = 'unfinished'; f.core.syncMesToSwipe(1);
+                if (mode === 'failure') throw Error('API failed');
+                if (mode === 'disable-running') f.disable();
+                else await f.ctx.stopGeneration();
+            });
+            await new Promise(resolve => setTimeout(resolve, 220)); await f.wait();
+        }
+        const result = await held;
+        assert.equal(result.ready, true); assert.equal(result.text, 'original'); assert.equal(result.count, true);
+        assert.equal(f.source.mes, 'original'); f.disable();
+    });
+}
+
+test('cancelled or superseded context never delivers a different chat or reply', async () => {
+    const f = await fixture({auto: true});
+    await f.ctx.eventSource.emit('GENERATION_STARTED', 'normal', {}, false);
+    const held = f.runtime().replyDelivery.waitForReply(1, 'normal');
+    await f.ctx.eventSource.emit('MESSAGE_RECEIVED', 1, 'normal');
+    f.setGenerate(async () => {
+        f.ctx.chatId = 'other'; f.ctx.chat = [{is_user:true,mes:'different'}];
+        await f.ctx.eventSource.emit('CHAT_CHANGED');
+    });
+    await new Promise(resolve => setTimeout(resolve, 220)); await f.wait();
+    assert.equal((await held).ready, false); f.disable();
+});
+
+test('auto off, unsupported turns, empty instructions and disabled extension never hold normal delivery', async () => {
+    const f = await fixture();
+    const api = f.runtime().replyDelivery;
+    await f.ctx.eventSource.emit('GENERATION_STARTED', 'normal', {}, false);
+    assert.equal(api.waitForReply(1), null);
+    f.ui().onAuto(true);
+    for (const type of ['quiet','impersonate','continue']) {
+        await f.ctx.eventSource.emit('GENERATION_STARTED', type, {}, false);
+        assert.equal(api.waitForReply(1), null);
+    }
+    await f.ctx.eventSource.emit('GENERATION_STARTED', 'normal', {}, false);
+    assert.equal(api.waitForReply(1, 'first_message'), null);
+    f.ui().onFeedback(''); assert.equal(api.waitForReply(1), null);
+    f.disable(); assert.equal(f.runtime(), undefined); assert.equal(api.waitForReply(1), null);
 });
 
 test('appends a new candidate even when rewriting an older swipe', async () => {
@@ -319,3 +414,5 @@ test('legacy interrupted temporary floors still recover with upstream scroll hel
     assert.equal(f.events.filter(e => e.name === 'MESSAGE_DELETED').length, 1);
     f.disable();
 });
+
+if (process.env.AUTO_REWRITE_LIST_CASES === '1') process.stdout.write(JSON.stringify(caseNames));
