@@ -4,6 +4,9 @@
 import {spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 
+const pure = spawnSync(process.execPath, ['--test', fileURLToPath(new URL('./feedback-presets.test.mjs', import.meta.url))], {encoding:'utf8', timeout:15000});
+process.stdout.write(pure.stdout || '');
+if (pure.error || pure.status !== 0) { process.stderr.write(pure.stderr || ''); throw pure.error ?? Error('Feedback preset tests failed'); }
 const file = fileURLToPath(new URL('./native-swipe.test.mjs', import.meta.url));
 const listing = spawnSync(process.execPath, ['--experimental-vm-modules', file], {
     env: {...process.env, AUTO_REWRITE_LIST_CASES: '1'}, encoding: 'utf8', timeout: 15000,

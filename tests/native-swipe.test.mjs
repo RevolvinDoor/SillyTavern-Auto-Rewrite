@@ -146,6 +146,24 @@ test('manual rewrite uses a native same-floor swipe, without synthetic lifecycle
     f.disable();
 });
 
+test('selected saved feedback is used for the request and switching mid-flight affects only the next rewrite', async () => {
+    const f = await fixture();
+    const s = f.ui().getSettings();
+    assert.equal(s.feedback, 'rewrite instruction'); assert.equal(s.feedbackPreset, 'legacy');
+    f.ui().onFeedbackPreset('select', 'workbench');
+    f.ui().onFeedbackPreset('save', '我的工作台');
+    f.ui().onFeedback('工作台专用改稿意见');
+    f.setGenerate(async () => {
+        const feedback = Object.entries(f.ctx.extensionPrompts).find(([key]) => key.endsWith('_feedback'))[1].value;
+        assert.equal(feedback, '工作台专用改稿意见');
+        f.ui().onFeedbackPreset('select', 'default');
+        assert.equal(Object.entries(f.ctx.extensionPrompts).find(([key]) => key.endsWith('_feedback'))[1].value, feedback);
+        await f.finish();
+    });
+    await f.rewrite(); assert.equal(s.feedbackPreset, 'default');
+    assert.ok(s.feedback.includes('上一轮正文问题很多')); f.disable();
+});
+
 function observeDelivery(ctx, runtime, deliveries) {
     for (const event of ['MESSAGE_RECEIVED', 'CHARACTER_MESSAGE_RENDERED']) {
         ctx.eventSource.on(event, (id, type) => {

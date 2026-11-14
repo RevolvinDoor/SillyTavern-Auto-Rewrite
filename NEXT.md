@@ -1,4 +1,15 @@
-# RevoPhone integration · 3.1.2
+# Feedback presets · 3.1.3
+
+- Authorized continuation: user requested multiple saved rewrite instructions plus a Design Workbench preset based on the local Moyue workshop. Prior main-push authorization continues for this fork only. RevoPhone and the referenced workshop are read-only this turn.
+- Gate: Local Fix / Local Fix Only for feedback settings and their existing UI. Budget: 10 files / 650 changed lines total, target production below 260. File count explicitly includes 3 test files and 3 release/receipt files. Expected: feedback-presets.js, index.js, ui.js, style.css, tests, manifest/README/NEXT. Forbidden: native-swipe.js, revisions.js, reply-delivery.js, model-routing.js, any host changes or dependencies.
+- Contract: retain the original default verbatim; migrate existing custom feedback into a named preset without changing active text; edits auto-save per preset. Support selection, named copies, custom rename/delete and explicit built-in reset. Keep runtime feedback compatibility and do not alter an in-flight rewrite. Invalid or duplicate names cannot overwrite another preset.
+- Source receipt: read-only Design Workbench revophone.5 project state, role description, author notes and control/measurement rules from the user's local Moyue workshop. Adapt their format/evidence/range/field-separation rules into rewrite instructions; do not embed or republish the tool card. High-precision output is a brief calibration summary, not step-by-step reasoning.
+- A0: goal, scope and acceptance explicit; library 2026-08-18 extension-dev route, A0/D5/E5 retained, no visual catalog candidates. Baseline: clean at 18ad8a4; all 28 existing cases passed.
+- Verification: focused persistence/migration/request-instruction cases, existing isolated-process regression runner, UI interaction/layout check in a local fixture when tooling permits, syntax/manifest/diff/full patch scope. Real model response compliance and host install remain live acceptance.
+- Rollback: revert the preset commit; never reset existing feedback or touch the optional RevoPhone delivery protocol. Stop if further storage or host changes become necessary.
+- Status: implementation complete for 3.1.3. Seven preset-state tests and 29 isolated host cases pass. Local Chromium UI checks pass for selection/copy/edit/rename/delete, escaped names, desktop and 360px layout, with no renderer exceptions; screenshot QA completed. The UI fixture is separate from any live host. Preparing final scope/manifest checks and authorized commit/push. Below is the previous release receipt.
+
+## Previous release · 3.1.2
 
 - Authorized: integrate upstream PR #1 (f7b8ddad2bda9fe5faed3a875c72bfc7165f53bc), implement optional RevoPhone coordination and push this fork's main. RevoPhone is a separate commit/push.
 - A0: goal, red lines and acceptance agreed in chat. Library snapshot 2026-08-18; routes extension-dev / code-quality-workflow; loaded A0, D5 and E5; no design candidates adopted.

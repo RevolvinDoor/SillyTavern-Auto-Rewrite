@@ -8,17 +8,10 @@ import { createModelRouting } from './model-routing.js';
 import { REVISION, recoverLegacyRewrite, versionLink, jumpVersion } from './revisions.js';
 import { claimNativeGeneration, clearNativePrompt, completeNativeSwipe, liveNativeReply, recoverNativeSwipe, restoreNativeSwipe, startNativeSwipe } from './native-swipe.js';
 import { createReplyDelivery } from './reply-delivery.js';
+import { normalizeFeedbackPresets, editFeedback, changeFeedbackPreset } from './feedback-presets.js';
 
 const KEY = 'rewrite_writer';
 const RUNTIME = Symbol.for('st.auto-rewrite.standalone');
-const DEFAULT_FEEDBACK = `上一轮正文问题很多：讲故事水平太差, 角色刻画不到位, 太过刻意俗套尬不自然，台词又尬又怪，逻辑不通，剧情和文风也有毛病。需要重写
-写本轮正文前，先用<pre>...</pre>做一次预分析，挑出上一轮的问题。</pre>后空一行，再写<content>。
-
-1. 角色刻画与心理, 行为逻辑有哪些问题（约1000字）
-2. 台词（约500字）: 哪些台词尬,怪,不合理,逻辑有问题
-3. 其他问题, 800字
-
-每部分最后用一两句写出"本轮改法"。正文要照着这些改法写，不能分析完了照旧。`;
 let installed = false;
 let ui;
 let cycle;
@@ -36,7 +29,7 @@ function settings() {
     const all = getContext().extensionSettings;
     if (!all[KEY] || typeof all[KEY] !== 'object') all[KEY] = {};
     if (typeof all[KEY].auto !== 'boolean') all[KEY].auto = false;
-    if (typeof all[KEY].feedback !== 'string') all[KEY].feedback = DEFAULT_FEEDBACK;
+    normalizeFeedbackPresets(all[KEY]);
     if (typeof all[KEY].profileId !== 'string') all[KEY].profileId = '';
     if (typeof all[KEY].model !== 'string') all[KEY].model = '';
     return all[KEY];
@@ -228,7 +221,12 @@ export function enable() {
             if (!value) clearPending();
             setStatus(value ? '等待下一次生成' : running ? '当前重写继续进行，后续自动重写已关闭' : '自动重写已关闭');
         },
-        onFeedback: value => { settings().feedback = value; if (!value.trim()) clearPending(); getContext().saveSettingsDebounced(); } });
+        onFeedback: value => { editFeedback(settings(), value); if (!value.trim()) clearPending(); getContext().saveSettingsDebounced(); },
+        onFeedbackPreset: (action, value) => {
+            changeFeedbackPreset(settings(), action, value);
+            if (!settings().feedback.trim()) clearPending();
+            getContext().saveSettingsDebounced();
+        } });
     ui.install();
     subscribe(events.APP_READY, () => { ui?.install(); void recoverInterrupted(); });
     subscribe(events.SETTINGS_LOADED, () => { ui?.sync(); ui?.refresh(); });

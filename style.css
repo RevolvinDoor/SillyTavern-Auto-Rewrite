@@ -262,11 +262,20 @@ button.auto-rewrite-menu-item[aria-selected="true"] .auto-rewrite-menu-check { o
 .auto-rewrite-setting-toggle b { font-size: .86em; font-weight: 600; }
 .auto-rewrite-setting-toggle small { opacity: .6; font-size: .73em; line-height: 1.35; }
 .auto-rewrite-label { display: flex; flex-direction: column; gap: 6px; margin: 0; font-size: .84em; }
+.auto-rewrite-feedback-presets { display: grid; gap: 6px; min-width: 0; }
+.auto-rewrite-preset-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.auto-rewrite-preset-actions input { flex: 1 1 150px; min-width: 0; width: 0; margin: 0; font: inherit; font-size: .84em; }
+.auto-rewrite-preset-actions button { flex: none; width: auto; margin: 0; font-size: .8em; }
+.auto-rewrite-preset-tools { display: flex; gap: 6px; align-items: center; }
+.auto-rewrite-preset-tools > span { flex: 1; }
+.auto-rewrite-preset-tools button:disabled { opacity: .35; cursor: default; }
 .auto-rewrite-controls textarea { width: 100%; min-height: 96px; box-sizing: border-box; margin: 0; padding: 8px 10px; border-radius: 10px; resize: vertical; font: inherit; font-size: .92em; line-height: 1.55; }
 .auto-rewrite-note { margin: 0; opacity: .55; font-size: .74em; line-height: 1.45; }
 .auto-rewrite-status { margin: 0; opacity: .8; font-size: .76em; line-height: 1.4; }
 .auto-rewrite-actions button:focus-visible, .auto-rewrite-controls input:not(.auto-rewrite-combo input):not(.auto-rewrite-menu-search input):focus-visible, .auto-rewrite-dialog button:focus-visible { outline: 2px solid #b6a4f8; outline-offset: 3px; }
 @media (max-width: 640px) {
+    .auto-rewrite-preset-actions { display: grid; grid-template-columns: 1fr 1fr; }
+    .auto-rewrite-preset-actions input { grid-column: 1 / -1; width: 100%; }
     .auto-rewrite-footer { align-items: flex-end; gap: 6px; }
     .auto-rewrite-actions { flex-wrap: wrap; border-radius: 14px; padding: 4px 6px; gap: 4px 6px; }
     .auto-rewrite-main { display: contents; }

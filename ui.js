@@ -1,3 +1,5 @@
+import { isBuiltinFeedback } from './feedback-presets.js';
+
 function duration(ms) {
     const seconds = Math.max(0, Math.floor(ms / 1000));
     return seconds < 60 ? `${seconds}秒` : `${Math.floor(seconds / 60)}分${seconds % 60}秒`;
@@ -220,7 +222,7 @@ function setDropdownButton(btn, items, value) {
     btn.dataset.value = value;
 }
 
-export function createRewriteUI({ getSettings, getView, getRouting, onRoute, onRefreshModels, onMainProfile, onMainModel, onRefreshMainModels, onAuto, onFeedback, onRewrite, onJump }) {
+export function createRewriteUI({ getSettings, getView, getRouting, onRoute, onRefreshModels, onMainProfile, onMainModel, onRefreshMainModels, onAuto, onFeedback, onFeedbackPreset, onRewrite, onJump }) {
     let panel, bar, footer, nativePager, pagerSlot, dialog, observer, frame, poll, clock, shown;
     let dock, dockViewport, dockObserver, dockPadding;
     let disposed = false;
@@ -283,7 +285,12 @@ export function createRewriteUI({ getSettings, getView, getRouting, onRoute, onR
                 </div>
                 <div class="auto-rewrite-model-summary"><i class="fa-solid fa-arrow-turn-up" aria-hidden="true"></i><span data-route-summary></span></div>
             </section>
-            <label class="auto-rewrite-label">修改意见<textarea class="text_pole" rows="4" spellcheck="false" data-feedback></textarea></label>
+            <section class="auto-rewrite-feedback-presets" aria-label="修改意见预设">
+                <label class="auto-rewrite-label"><span>修改意见预设</span><button type="button" class="auto-rewrite-select-btn" data-feedback-preset aria-haspopup="listbox" aria-expanded="false" aria-label="选择修改意见预设"><span class="auto-rewrite-select-text" data-btn-label></span><span class="auto-rewrite-select-tag" data-btn-tag hidden></span><i class="fa-solid fa-chevron-down auto-rewrite-caret" aria-hidden="true"></i></button></label>
+                <div class="auto-rewrite-preset-actions"><input class="text_pole" type="text" maxlength="80" data-preset-name placeholder="新预设名称" aria-label="新建或重命名预设的名称"><button type="button" class="menu_button" data-preset-save>另存为</button><button type="button" class="menu_button" data-preset-rename>重命名</button></div>
+                <div class="auto-rewrite-preset-tools"><span class="auto-rewrite-note">编辑内容会自动保存到当前预设</span><button type="button" class="auto-rewrite-icon-button" data-preset-reset title="恢复当前内置预设原文" aria-label="恢复当前内置预设原文"><i class="fa-solid fa-rotate-left" aria-hidden="true"></i></button><button type="button" class="auto-rewrite-icon-button" data-preset-delete title="删除当前自定义预设" aria-label="删除当前自定义预设"><i class="fa-solid fa-trash-can" aria-hidden="true"></i></button></div>
+            </section>
+            <label class="auto-rewrite-label">修改意见<textarea class="text_pole" rows="8" spellcheck="false" data-feedback></textarea></label>
             <p class="auto-rewrite-note">沿用当前写作预设。重写结束后恢复首轮连接，原稿保留为上一版。</p>
             <p class="auto-rewrite-status" data-status role="status"></p>`;
         root.querySelector('[data-auto]').addEventListener('change', event => { onAuto(event.target.checked); sync(); refresh(); });
@@ -294,6 +301,29 @@ export function createRewriteUI({ getSettings, getView, getRouting, onRoute, onR
             const items = JSON.parse(btn.dataset.items || '[]');
             menu.open({ anchor: btn, box, items, value: btn.dataset.value || '', onPick });
         };
+
+        const presetAction = (action, value) => {
+            try {
+                onFeedbackPreset(action, value);
+                root.querySelector('[data-preset-name]').value = '';
+                sync(); refresh();
+            } catch (error) { globalThis.toastr?.warning(error.message); }
+        };
+        const presetBtn = root.querySelector('[data-feedback-preset]');
+        presetBtn.addEventListener('click', () => openBtnMenu(presetBtn, id => presetAction('select', id)));
+        const nameInput = root.querySelector('[data-preset-name]');
+        nameInput.addEventListener('input', sync);
+        nameInput.addEventListener('keydown', event => {
+            if (event.key === 'Enter') { event.preventDefault(); presetAction('save', nameInput.value); }
+        });
+        for (const action of ['save', 'rename']) root.querySelector(`[data-preset-${action}]`).addEventListener('click', () => presetAction(action, nameInput.value));
+        root.querySelector('[data-preset-delete]').addEventListener('click', () => {
+            const name = getSettings().feedbackPresets.find(preset => preset.id === getSettings().feedbackPreset)?.name;
+            if (globalThis.confirm(`删除修改意见预设“${name}”？`)) presetAction('delete');
+        });
+        root.querySelector('[data-preset-reset]').addEventListener('click', () => {
+            if (globalThis.confirm('恢复这套内置预设的原文？当前编辑将被替换，可先另存为保留。')) presetAction('reset');
+        });
 
         const mainProfileBtn = root.querySelector('[data-main-profile]');
         mainProfileBtn.addEventListener('click', () => openBtnMenu(mainProfileBtn, id => {
@@ -365,7 +395,16 @@ export function createRewriteUI({ getSettings, getView, getRouting, onRoute, onR
             const seq = root.dataset.formId;
             root.querySelector('[data-auto]').checked = settings.auto;
             const field = root.querySelector('[data-feedback]');
-            if (document.activeElement !== field) field.value = settings.feedback;
+            if (field.dataset.preset !== settings.feedbackPreset || document.activeElement !== field) field.value = settings.feedback;
+            field.dataset.preset = settings.feedbackPreset;
+            const presetBtn = root.querySelector('[data-feedback-preset]');
+            setDropdownButton(presetBtn, settings.feedbackPresets.map(preset => ({value: preset.id, label: preset.name,
+                tag: isBuiltinFeedback(preset.id) ? '内置' : ''})), settings.feedbackPreset);
+            const builtin = isBuiltinFeedback(settings.feedbackPreset), named = Boolean(root.querySelector('[data-preset-name]').value.trim());
+            root.querySelector('[data-preset-save]').disabled = !named;
+            root.querySelector('[data-preset-rename]').disabled = builtin || !named;
+            root.querySelector('[data-preset-delete]').disabled = builtin;
+            root.querySelector('[data-preset-reset]').disabled = !builtin;
 
             // Main API group
             const mainProfileBtn = root.querySelector('[data-main-profile]');
