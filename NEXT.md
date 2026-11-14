@@ -1,4 +1,15 @@
-# Feedback presets · 3.1.3
+# Story auto-rewrite event order · 3.1.4
+
+- Authorized continuation: fix reported automatic rewrite and expose the same story-only auto switch from RevoPhone. Both repositories retain their previously authorized main pushes; no live host/account mutation.
+- Gate: Local Fix / Local Fix Only, event ownership plus optional control interface. Budget 6 files / 450 lines here; RevoPhone separately scoped. Preserve native generation, presets, revision storage and reply-delivery compatibility. No host edits or dependencies.
+- Evidence/provenance: local TauriTavern 2.4.0 src/script.js emits GENERATION_STARTED at 5193 before sendMessageAsUser/MESSAGE_SENT (5345, 7249). The current unconditional MESSAGE_SENT handler clears cycle. Quiet/raw phone generation is separate from visible story generation; core/backend.js generateTextRaw calls context.generateRaw, not generate.
+- Contract: preserve the one user-message append belonging to the active normal story generation, still cancel on a later user turn; ignore quiet background cycles without suppressing host events. Only normal/regenerate/swipe visible story replies auto-rewrite. Phone, Soul, calls and other background requests neither rewrite nor clear a queued story rewrite. In-flight unrelated generation keeps existing route safety.
+- Control v1: read state, set the existing auto setting, open rewrite settings, optional subscription with cleanup. RevoPhone keeps no second setting. No installed plugin means normal RevoPhone behavior and an unavailable UI control.
+- Verification: first reproduce event-order regression in an awaited-event fixture; tests for background isolation, no recursion, pending cancellation and shared switch; focused/full regression, local UI controls and source checks. Real user runtime remains to be checked after update.
+- Baseline: clean at 57495ba (3.1.3), previous 7 preset + 29 host cases. Rollback: revert this fix, retain preset content; stop if event ownership cannot be established.
+- Status: fixed both pre-change failing cases. Seven preset + 34 isolated host cases pass; 6 cross-repository cases pass in separate processes (shared switch, real backend raw path single request, correct native input order). RevoPhone 158 cases and local Chromium settings UI checks pass. No live host/paid model/Android acceptance. Final release/source checks and authorized two-repository pushes next. Previous receipts below.
+
+## Previous release · 3.1.3
 
 - Authorized continuation: user requested multiple saved rewrite instructions plus a Design Workbench preset based on the local Moyue workshop. Prior main-push authorization continues for this fork only. RevoPhone and the referenced workshop are read-only this turn.
 - Gate: Local Fix / Local Fix Only for feedback settings and their existing UI. Budget: 10 files / 650 changed lines total, target production below 260. File count explicitly includes 3 test files and 3 release/receipt files. Expected: feedback-presets.js, index.js, ui.js, style.css, tests, manifest/README/NEXT. Forbidden: native-swipe.js, revisions.js, reply-delivery.js, model-routing.js, any host changes or dependencies.

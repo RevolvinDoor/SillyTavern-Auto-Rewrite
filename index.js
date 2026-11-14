@@ -21,6 +21,7 @@ let timer;
 let sequence = 0;
 let status = '等待下一次生成';
 const subscriptions = [];
+const controlListeners = new Set();
 const routing = createModelRouting();
 const delivery = createReplyDelivery(getContext, () => running ??
     (installed && settings().auto && settings().feedback.trim() && cycle?.eligible && !cycle.attempted ? cycle : null));
@@ -58,6 +59,19 @@ function isIdle(ctx = getContext()) {
 function setStatus(text) {
     status = text;
     ui?.refresh();
+}
+
+function notifyControl() {
+    for (const listener of controlListeners) {
+        try { listener(); } catch (error) { console.error('[Auto Rewrite] Control listener', error); }
+    }
+}
+
+function setAuto(value) {
+    settings().auto = Boolean(value); getContext().saveSettingsDebounced();
+    if (!value) clearPending();
+    setStatus(value ? '等待下一次正文生成' : running ? '当前重写继续进行，后续自动重写已关闭' : '自动重写已关闭');
+    ui?.sync(); notifyControl();
 }
 
 function clearPending(keepDelivery = false) {
@@ -207,7 +221,13 @@ export function enable() {
     if (installed) return;
     globalThis[RUNTIME]?.disable?.();
     installed = true;
-    globalThis[RUNTIME] = { disable, replyDelivery: { version: 1, waitForReply: delivery.waitForReply } };
+    globalThis[RUNTIME] = { disable, replyDelivery: { version: 1, waitForReply: delivery.waitForReply }, control: {
+        version: 1,
+        getState: () => ({available: installed, auto: installed && settings().auto}),
+        setAuto: value => { if (!installed) throw Error('正文重写扩展已禁用'); setAuto(value); },
+        openSettings: () => { if (!installed) throw Error('正文重写扩展已禁用'); ui?.openSettings(); },
+        subscribe: listener => { controlListeners.add(listener); return () => controlListeners.delete(listener); },
+    } };
     const { eventTypes: events } = getContext();
     ui = createRewriteUI({ getSettings: settings, getView: view, onRewrite: manualRewrite, onJump: jump,
         getRouting: () => routing.describe(settings()),
@@ -216,11 +236,7 @@ export function enable() {
         onMainProfile: id => { routing.setMainProfile(id); ui?.sync(); ui?.refresh(); },
         onMainModel: model => { routing.setMainModel(model); ui?.sync(); ui?.refresh(); },
         onRefreshMainModels: signal => routing.refreshModels({ profileId: '', model: '' }, signal),
-        onAuto: value => {
-            settings().auto = value; getContext().saveSettingsDebounced();
-            if (!value) clearPending();
-            setStatus(value ? '等待下一次生成' : running ? '当前重写继续进行，后续自动重写已关闭' : '自动重写已关闭');
-        },
+        onAuto: setAuto,
         onFeedback: value => { editFeedback(settings(), value); if (!value.trim()) clearPending(); getContext().saveSettingsDebounced(); },
         onFeedbackPreset: (action, value) => {
             changeFeedbackPreset(settings(), action, value);
@@ -228,6 +244,7 @@ export function enable() {
             getContext().saveSettingsDebounced();
         } });
     ui.install();
+    notifyControl();
     subscribe(events.APP_READY, () => { ui?.install(); void recoverInterrupted(); });
     subscribe(events.SETTINGS_LOADED, () => { ui?.sync(); ui?.refresh(); });
     for (const type of [events.CONNECTION_PROFILE_CREATED, events.CONNECTION_PROFILE_UPDATED,
@@ -245,8 +262,11 @@ export function enable() {
             }
             return;
         }
+        // Quiet requests (phone calls/chats, helpers) do not own the story turn.
+        if (type === 'quiet') return;
         clearPending();
-        cycle = { id: ++sequence, key: chatKey(), attempted: false,
+        cycle = { id: ++sequence, key: chatKey(), attempted: false, inputIndex: getContext().chat.length,
+            acceptsInput: [undefined, 'normal'].includes(type) && !options?.automatic_trigger,
             eligible: [undefined, 'normal', 'regenerate', 'swipe'].includes(type) && isSingleChat(getContext()) };
         ui?.refresh();
     });
@@ -254,7 +274,8 @@ export function enable() {
         if (running && running.nativeStarted && Number(id) === running.index
             && getContext().chat[running.index] === running.source && type === 'swipe') running.received = true;
         ui?.refresh();
-        if (running || !settings().auto || !cycle?.eligible || cycle.attempted || type === 'first_message') return;
+        if (running || !settings().auto || !cycle?.eligible || cycle.attempted
+            || ![undefined, 'normal', 'regenerate', 'swipe'].includes(type)) return;
         const ctx = getContext();
         const stream = ctx.streamingProcessor;
         if (stream?.isStopped || stream?.abortController?.signal.aborted) return;
@@ -289,7 +310,13 @@ export function enable() {
     subscribe(events.CHAT_LOADED, () => { ui?.install(); void recoverInterrupted(); });
     for (const type of [events.MESSAGE_SWIPED, events.MESSAGE_UPDATED, events.MESSAGE_DELETED,
         events.CHARACTER_MESSAGE_RENDERED, events.MORE_MESSAGES_LOADED]) subscribe(type, () => ui?.refresh());
-    subscribe(events.MESSAGE_SENT, () => {
+    subscribe(events.MESSAGE_SENT, id => {
+        const ctx = getContext();
+        // Native Generate starts before appending this turn's user input. Keep
+        // that cycle; a later/manual append must still cancel pending work.
+        if (!running && cycle?.eligible && cycle.acceptsInput && chatKey(ctx) === cycle.key
+            && Number(id) === cycle.inputIndex && ctx.chat.length === cycle.inputIndex + 1
+            && ctx.chat[Number(id)]?.is_user) { cycle.acceptsInput = false; return; }
         clearPending(); cycle = null;
         if (running) {
             running.cancelled = true; running.timing.finishedAt ??= Date.now();
@@ -302,6 +329,7 @@ export function enable() {
 
 export function disable() {
     installed = false;
+    notifyControl();
     clearPending(); cycle = null;
     const job = running;
     if (job) {

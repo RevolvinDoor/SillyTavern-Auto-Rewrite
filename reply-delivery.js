@@ -6,7 +6,7 @@ const usable = m => m && !m.is_user && !m.is_system && m.mes?.trim() && m.mes.tr
 export function createReplyDelivery(context, owner) {
     function waitForReply(id, type) {
         const ctx = context(), current = owner(), message = ctx.chat[Number(id)];
-        if (!current || type === 'first_message' || Number(id) < 1 || ctx.groupId
+        if (!current || ![undefined, 'normal', 'regenerate', 'swipe'].includes(type) || Number(id) < 1 || ctx.groupId
             || Number(id) !== ctx.chat.length - 1 || current.key !== keyOf(ctx)
             || !message || message.is_user || message.is_system
             || (current.source && current.source !== message)) return null;

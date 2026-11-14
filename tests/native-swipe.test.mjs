@@ -111,9 +111,10 @@ export async function fixture({ swipes = ['original'], selected = 0, auto = fals
     const entry = await load(new URL('index.js', root)); await entry.evaluate(); entry.namespace.enable();
     const native = await load(new URL('native-swipe.js', root));
     const finish = async (text = 'rewritten') => {
-        source.mes = text; core.syncMesToSwipe(1);
-        await ctx.eventSource.emit('MESSAGE_RECEIVED', 1, 'swipe');
-        await ctx.eventSource.emit('CHARACTER_MESSAGE_RENDERED', 1, 'swipe');
+        const id = ctx.chat.indexOf(source);
+        source.mes = text; core.syncMesToSwipe(id);
+        await ctx.eventSource.emit('MESSAGE_RECEIVED', id, 'swipe');
+        await ctx.eventSource.emit('CHARACTER_MESSAGE_RENDERED', id, 'swipe');
     };
     generate = () => finish();
     const wait = async () => {
@@ -162,6 +163,61 @@ test('selected saved feedback is used for the request and switching mid-flight a
     });
     await f.rewrite(); assert.equal(s.feedbackPreset, 'default');
     assert.ok(s.feedback.includes('上一轮正文问题很多')); f.disable();
+});
+
+test('auto rewrite survives native GENERATION_STARTED then MESSAGE_SENT for the same user turn', async () => {
+    const f = await fixture({auto:true}); f.ctx.chat = [f.user]; f.core.is_send_press = true;
+    await f.ctx.eventSource.emit('GENERATION_STARTED','normal',{},false);
+    f.ctx.chat.push({is_user:true,mes:'本轮输入'});
+    await f.ctx.eventSource.emit('MESSAGE_SENT',1);
+    f.ctx.chat.push(f.source);
+    await f.ctx.eventSource.emit('MESSAGE_RECEIVED',2,'normal');
+    await f.ctx.eventSource.emit('CHARACTER_MESSAGE_RENDERED',2,'normal');
+    await f.ctx.eventSource.emit('GENERATION_ENDED',3); f.core.is_send_press = false;
+    await new Promise(resolve=>setTimeout(resolve,220)); await f.wait();
+    assert.equal(f.calls.length,1); assert.equal(f.source.mes,'rewritten');
+    assert.equal(f.ctx.chat.length,3); f.disable();
+});
+
+test('phone quiet generation neither rewrites a phone result nor cancels queued story rewrite', async () => {
+    const f = await fixture({auto:true});
+    await f.ctx.eventSource.emit('GENERATION_STARTED','normal',{},false);
+    await f.ctx.eventSource.emit('MESSAGE_RECEIVED',1,'normal');
+    await f.ctx.eventSource.emit('GENERATION_STARTED','quiet',{quiet_prompt:'phone'},false);
+    await f.ctx.eventSource.emit('MESSAGE_RECEIVED',1,'quiet');
+    await f.ctx.eventSource.emit('GENERATION_ENDED',2);
+    await new Promise(resolve=>setTimeout(resolve,220)); await f.wait();
+    assert.equal(f.calls.length,1); assert.equal(f.source.mes,'rewritten'); f.disable();
+});
+
+test('quiet phone-only replies never queue a rewrite or acquire a story delivery hold', async () => {
+    const f = await fixture({auto:true});
+    await f.ctx.eventSource.emit('GENERATION_STARTED','quiet',{quiet_prompt:'phone call'},false);
+    await f.ctx.eventSource.emit('MESSAGE_RECEIVED',1,'quiet');
+    assert.equal(f.runtime().replyDelivery.waitForReply(1,'quiet'),null);
+    await new Promise(resolve=>setTimeout(resolve,190));
+    assert.equal(f.calls.length,0); assert.equal(f.source.mes,'original'); f.disable();
+});
+
+test('a later user append still cancels a pending automatic rewrite', async () => {
+    const f = await fixture({auto:true});
+    await f.ctx.eventSource.emit('GENERATION_STARTED','normal',{},false);
+    await f.ctx.eventSource.emit('MESSAGE_RECEIVED',1,'normal');
+    f.ctx.chat.push({is_user:true,mes:'新的回合'});
+    await f.ctx.eventSource.emit('MESSAGE_SENT',2);
+    await new Promise(resolve=>setTimeout(resolve,190));
+    assert.equal(f.calls.length,0);assert.equal(f.ctx.chat[2].mes,'新的回合');f.disable();
+});
+
+test('optional story control shares the existing auto setting and releases subscriptions', async () => {
+    const f = await fixture(); const control=f.runtime().control, seen=[];
+    assert.equal(control.version,1); assert.equal(control.getState().auto,false);
+    const stop=control.subscribe(()=>seen.push(control.getState().auto));
+    control.setAuto(true); assert.equal(f.ui().getSettings().auto,true);
+    f.ui().onAuto(false); assert.equal(control.getState().auto,false);
+    stop();control.setAuto(true);assert.deepEqual(seen,[true,false]);
+    f.disable();assert.equal(control.getState().available,false);
+    assert.throws(()=>control.setAuto(true),/禁用/);
 });
 
 function observeDelivery(ctx, runtime, deliveries) {
@@ -242,6 +298,7 @@ test('auto off, unsupported turns, empty instructions and disabled extension nev
     await f.ctx.eventSource.emit('GENERATION_STARTED', 'normal', {}, false);
     assert.equal(api.waitForReply(1), null);
     f.ui().onAuto(true);
+    await f.ctx.eventSource.emit('GENERATION_STOPPED');
     for (const type of ['quiet','impersonate','continue']) {
         await f.ctx.eventSource.emit('GENERATION_STARTED', type, {}, false);
         assert.equal(api.waitForReply(1), null);
